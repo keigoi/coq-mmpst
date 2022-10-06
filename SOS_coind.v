@@ -15,7 +15,7 @@ Import Prenex Implicits.
 Definition role:=nat.
 Definition lbl := nat.
 
-CoInductive rg_ty :=
+CoInductive rg_ty : Set :=
 | rg_end
 | rg_msg (bSEND : bool) (FROM TO : role) (LBL : lbl)
          (CONT : rg_ty)
@@ -47,7 +47,8 @@ Inductive rg_bisim_gen (r:g_rel) : g_rel :=
 
 Hint Constructors rg_bisim_gen.
 
-Axiom rg_bisim_gen_monotone : monotone2 rg_bisim_gen.
+Lemma rg_bisim_gen_monotone : monotone2 rg_bisim_gen.
+Proof. pmonauto. Qed.
 Hint Resolve rg_bisim_gen_monotone.
 
 Definition rg_bisim g g' := paco2 rg_bisim_gen bot2 g g'.
@@ -137,7 +138,8 @@ Inductive gop_step_rules (r:g_step_rel) : g_step_rel :=
         ACT
         (rg_choice P GL' GR')
 .
-Derive Dependent Inversion gop_step_rules_inv with (forall r G ACT G', gop_step_rules r G ACT G') Sort Prop.
+Derive Dependent Inversion gop_step_rules_dep_inv with (forall r G ACT G', gop_step_rules r G ACT G') Sort Prop.
+Derive Inversion gop_step_rules_inv with (forall r G ACT G', gop_step_rules r G ACT G') Sort Prop.
 Hint Constructors gop_step_rules.
 
 Inductive gop_step_corules (r:g_step_rel) : g_step_rel :=
@@ -245,8 +247,14 @@ Proof.
         - by apply: P_choicecoruleR=>//; apply Ih.
 Qed.
 
-Inductive g_step_gen r : g_step_rel :=
+(* Inductive g_step_gen r : g_step_rel :=
 | g_step_gen_make G ACT G' : 
+    gop_step_rules r G ACT G' -> 
+    g_step_wit G ACT G' ->
+    g_step_gen r G ACT G'. *)
+
+Inductive g_step_gen r G ACT G' : Prop :=
+| g_step_gen_make : 
     gop_step_rules r G ACT G' -> 
     g_step_wit G ACT G' ->
     g_step_gen r G ACT G'.
@@ -351,6 +359,8 @@ Ltac injection_all :=
     match goal with 
     | |- _ = _ -> _ => 
       injection_top0
+    | |- _ <> _ -> _ =>
+      intro
     | |- ?P -> _ =>
       let H := fresh in 
       move=>H; try injection_all; move:H
@@ -370,204 +380,97 @@ Ltac inversion_using P Hinv :=
 Ltac unfold_upaco :=
     case; last done; let H:= fresh in move=>H; punfold H; move:H.
 
-(* a very dirty proof with full of cut-paste *)
+Ltac unfold_upaco_all :=
+    repeat
+      match goal with
+      | |- upaco2 ?gf bot2 _ _ -> _ =>
+        case; last done; let H:= fresh in move=>H; punfold H; unfold_upaco_all; move:H
+      | |- upaco3 ?gf bot3 _ _ _ -> _ =>
+        case; last done; let H:= fresh in move=>H; punfold H; unfold_upaco_all; move:H
+      | |- _ -> _ =>
+        let H := fresh in move=>H; punfold H; unfold_upaco_all; move:H
+      | _ =>
+        idtac
+      end.
 
 Lemma determinacy G ACT G1
     : disjoint_choice G -> g_step G ACT G1 -> forall G2, g_step G ACT G2 -> rg_bisim G1 G2.
 Proof.
-    move:G G1; pcofix CIH; move=>G G1.
-    move=>Hdisj; 
-    elim/g_step_inv=> Hstep Hrule Hwit.
-    elim: Hwit =>
-      [F T L {}G1
-      |F T L {}G1
-      |F T L G' {}ACT G'' _ IH Hsubj1 Hsubj2
-      |F T L G' {}ACT G'' _ IH Hsubj1
-      |AT GL GR {}ACT GL1 Hwit1' IH Hsubj
-      |AT GL GR {}ACT GL' Hwit1' IH Hsubj
-      |AT GL GR {}ACT GL' GR' Hwit1L IH1 Hwit1R IH2 Hsubj
-      |AT GL GR {}ACT GL' GR' Hwit1' IH Hsubj
-      |AT GL GR {}ACT GL' GR' Hwit1' IH Hsubj] in CIH Hstep Hdisj Hrule *; move=> G2
+    move:G ACT G1; 
+    pcofix CIH;
+    move=>G ACT G1 Hdisj Hstep;
+    punfold Hstep; move:(Hstep);
+    case=>Hrule Hwit;
+    elim/g_step_wit_ind:Hwit=> (* nested induction for proving choice *)
+    [F T L {}G1
+    |F T L {}G1
+    |F T L G' {}ACT G'' _ IH Hsubj1 Hsubj2
+    |F T L G' {}ACT G'' _ IH Hsubj1
+    |AT GL GR {}ACT {}G1 Hwit1' IH Hsubj
+    |AT GL GR {}ACT {}G1 Hwit1' IH Hsubj
+    |AT GL GR {}ACT GL' GR' Hwit1L IH1 Hwit1R IH2 Hsubj
+    |AT GL GR {}ACT GL' GR' Hwit1' IH Hsubj
+    |AT GL GR {}ACT GL' GR' Hwit1' IH Hsubj]
+    in Hdisj Hstep Hrule *;
+    move=>G2 Hstep2;
+    punfold Hstep2; move:(Hstep2);
+    case=>Hrule2 Hwit2;    
+    inversion_subst Hrule gop_step_rules_inv=> _;
+    inversion_subst Hrule2 gop_step_rules_inv=>_.
+        
+    (* We have 13 goals here.
+       The reason for the use of our inversion_subst is just for 
+       hypothesis naming; the standard inversion tactic
+       (inversion Hrule as []; inversion Hrule2 as []; subst; try done.)
+       will yield the same number of goals; though without control 
+       on names for hypotheses. 
+      *)
 
-    ;elim/g_step_inv=> Hstep2 Hrule2 Hwit2;
-    do [inversion_subst Hwit2 g_step_wit_inv => _ Hwitrule2] in Hdisj Hrule Hrule2.
+    1,2,3,4,5,6,7,8,9,10:
+      move=>Hstep2' Hstep1'; pclearbot.
 
-    - 2,4,6,8: 
-      by elim/gop_step_corules_inv: Hwitrule2=>//.
-    - 6,8:
-      inversion_subst Hwitrule2 gop_step_corules_inv=>_ _ Hsubj';
-      move=>/eqnP in Hsubj; move=>/eqnP in Hsubj'; done.
+    11,12,13:
+      move=>Hstep2L Hstep2R Hstep1L Hstep1R; pclearbot.
 
-    - 1,2: do [inversion_subst Hwitrule2 gop_step_rules_inv=> _ Hwit2 Hsubj' ] =>//=; try (move=>Hsubj2').
-
-    - 1,2: elim/gop_step_rules_inv: Hwitrule2 => _ => [>|>|? ? ? ? ? G2' Hwit2' _ _|? ? ? ? ? G2' Hwit2' _|||]//=; 
-      injection_subst.
-      inversion_subst Hrule gop_step_rules_inv => _;
-      unfold_upaco=>Hrule;
-      inversion_subst Hrule g_step_gen_inv => _;
-      (inversion_subst Hrule2 gop_step_rules_inv => _;
-      unfold_upaco=>Hrule2;
-      inversion_subst Hrule2 g_step_gen_inv => _) => Hrule Hwit _ _ Hrule2 Hwit2 _ _.
-      + pfold. constructor. right. apply:CIH. Focus 2. pfold. constructor. apply:Hrule2. apply: Hwit2.
-        inversion_clear Hdisj. apply H. pfold. constructor. assumption. assumption.
-
-    - inversion_subst Hrule gop_step_rules_inv => _;
-      unfold_upaco=>Hrule;
-      inversion_subst Hrule g_step_gen_inv => _;
-      (inversion_subst Hrule2 gop_step_rules_inv => _;
-      unfold_upaco=>Hrule2;
-      inversion_subst Hrule2 g_step_gen_inv => _) => Hrule Hwit _ Hrule2 Hwit2 _.
-      + pfold. constructor. right. apply:CIH. Focus 2. pfold. constructor. apply:Hrule2. apply: Hwit2.
-        inversion_clear Hdisj. apply H. pfold. constructor. assumption. assumption.
-
-    - inversion_subst Hrule gop_step_rules_inv => _;
-      unfold_upaco=>Hrule;
-      inversion_subst Hrule g_step_gen_inv => _ Hrule Hwit;
-      inversion_subst Hrule2 gop_step_rules_inv => _;
-      unfold_upaco=>Hrule2;
-      inversion_subst Hrule2 g_step_gen_inv => _ Hrule2 Hwit2;
-      [ 
-      | by inversion_clear Hdisj; (have: ACT<>ACT; last (by elim));
-        apply:H=>//=;
-        first [by left; apply:Hrule2 | by left; apply:Hrule]
-      ..|
-      inversion_subst Hwit1' g_step_wit_inv => _ Hwitrule;
-      inversion_clear Hdisj; (have: ACT<>ACT; last (by elim));
-      apply:H=>//=;
-      first [left; apply:Hwitrule
-            |left; apply Hrule
-            |right; apply:Hwitrule
-            |left; apply: Hrule2]
-      ].
-      by apply:IH=>//; first [by inversion_clear Hdisj | by pfold].
-
-    - inversion_subst Hrule gop_step_rules_inv => _;
-      unfold_upaco=>Hrule;
-      inversion_subst Hrule g_step_gen_inv => _ Hrule Hwit;
-      inversion_subst Hrule2 gop_step_rules_inv => _;
-      unfold_upaco=>Hrule2;
-      inversion_subst Hrule2 g_step_gen_inv => _ Hrule2 Hwit2;
-      [
-        inversion_subst Hwit1' g_step_wit_inv => _ Hwitrule;
-        inversion_clear Hdisj; (have: ACT<>ACT; last (by elim));
-        apply:H=>//=;
-        first [left; apply:Hwitrule
-              |left; apply Hrule
-              |right; apply:Hwitrule
-              |left; apply: Hrule2]
-      | by inversion_clear Hdisj; (have: ACT<>ACT; last (by elim));
-        apply:H=>//=;
-        first [by left; apply:Hrule2 | by left; apply:Hrule]
-      ..|
-      ].
-      by apply:IH=>//; first [by inversion_clear Hdisj | by pfold].
-
-    - inversion_subst Hrule gop_step_rules_inv => _ Hrule' Hrule'';
-      move:Hrule'; unfold_upaco=>Hrule;inversion_subst Hrule g_step_gen_inv => _ Hrule' Hwit';
-      move:Hrule'';unfold_upaco=>Hrule;inversion_subst Hrule g_step_gen_inv => _ Hrule'' Hwit'' _;
-      inversion_subst Hrule2 gop_step_rules_inv => _ Hrule2' Hrule2'';
-      move:Hrule2'; unfold_upaco=>Hrule2;inversion_subst Hrule2 g_step_gen_inv => _ Hrule2' Hwit2';
-      move:Hrule2'';unfold_upaco=>Hrule2;inversion_subst Hrule2 g_step_gen_inv => _ Hrule2'' Hwit2'' _.
-      pfold; constructor; left. 
-      - apply IH1=>//=.
-        * by pfold.
-        * by inversion_clear Hdisj.
-        * by pfold.
-      - apply IH2=>//=.
-        * by pfold.
-        * by inversion_clear Hdisj.
-        * by pfold.
-  
-    (* 上と同じ *)
-    - inversion_subst Hrule gop_step_rules_inv => _ Hrule' Hrule'';
-      move:Hrule'; unfold_upaco=>Hrule;inversion_subst Hrule g_step_gen_inv => _ Hrule' Hwit';
-      move:Hrule'';unfold_upaco=>Hrule;inversion_subst Hrule g_step_gen_inv => _ Hrule'' Hwit'' _;
-      inversion_subst Hrule2 gop_step_rules_inv => _ Hrule2' Hrule2'';
-      move:Hrule2'; unfold_upaco=>Hrule2;inversion_subst Hrule2 g_step_gen_inv => _ Hrule2' Hwit2';
-      move:Hrule2'';unfold_upaco=>Hrule2;inversion_subst Hrule2 g_step_gen_inv => _ Hrule2'' Hwit2'' _.
-      pfold; constructor; left. 
-      - apply IH1=>//=.
-        * by pfold.
-        * by inversion_clear Hdisj.
-        * by pfold.
-      - apply IH2=>//=.
-        * by pfold.
-        * by inversion_clear Hdisj.
-        * by pfold.
-  
-        Ltac unfold_upaco' :=
-            case; last done; let H:= fresh in move=>H; punfold H; move:H.
+    1,2:
+      (* asynchronous send/recv *)
+      pfold; constructor; right; 
+      apply:CIH; first (inversion_clear Hdisj; apply:H); pfold;
+      punfold Hstep1'; punfold Hstep2';
+      by first [apply:Hstep1' | apply:Hstep2'].
     
-    (* move:G2 Hwitrule2 Hrule2; pcofix CIH => G2 Hwitrule2 Hrule2. *)
-    - inversion_subst Hrule gop_step_rules_inv => _ Hrule' Hrule'';
-      move:Hrule'; unfold_upaco=>Hrule; inversion_subst Hrule g_step_gen_inv => _ Hrule' Hwit'.
-      move:Hrule'';unfold_upaco=>Hrule; inversion_subst Hrule g_step_gen_inv => _ Hrule'' Hwit'' _.
-      elim/gop_step_rules_inv: Hrule2  => _ => [>|>|>|>|>|>|AT0 GL0 GR0 ACT0 GL'0 GR'0 Hrule2' Hrule2'']//=; 
-      injection_subst.
-      move:Hrule2'; unfold_upaco=>Hrule2;inversion_subst Hrule2 g_step_gen_inv => _ Hrule2' Hwit2';
-      move:Hrule2'';unfold_upaco=>Hrule2;inversion_subst Hrule2 g_step_gen_inv => _ Hrule2'' Hwit2'' _. 
-      pfold. constructor. left.
-      - apply:IH=>//=.
-        * by pfold.
-        * by inversion_clear Hdisj.
-        * by pfold.
-      - right; apply:CIH=>//=.
-        * inversion_clear Hdisj. apply H1.
-        * by pfold.
-        * by pfold.
-    
-    Focus 2.
+    1,8:
+      (* choice. we need induction hypothesis! *)
+      apply:IH=>//; punfold Hstep1'; punfold Hstep2'=>//=;
+      by first [
+        inversion_clear Hdisj as [ | |? ? ? _ HdisjL HdisjR]; 
+        first [by apply:HdisjL | by apply:HdisjR]
+      |
+        by first [by case:Hstep1'=>Hrule1' | by case:Hstep2'=>Hrule2' ] ].
 
-    (*上とほぼ同じ*)
-    - inversion_subst Hrule gop_step_rules_inv => _ Hrule' Hrule'';
-      move:Hrule'; unfold_upaco=>Hrule; inversion_subst Hrule g_step_gen_inv => _ Hrule' Hwit'.
-      move:Hrule'';unfold_upaco=>Hrule; inversion_subst Hrule g_step_gen_inv => _ Hrule'' Hwit'' _.
-      elim/gop_step_rules_inv: Hrule2  => _ => [>|>|>|>|>|>|AT0 GL0 GR0 ACT0 GL'0 GR'0 Hrule2' Hrule2'']//=; 
-      injection_subst.
-      move:Hrule2'; unfold_upaco=>Hrule2;inversion_subst Hrule2 g_step_gen_inv => _ Hrule2' Hwit2';
-      move:Hrule2'';unfold_upaco=>Hrule2;inversion_subst Hrule2 g_step_gen_inv => _ Hrule2'' Hwit2'' _. 
-      pfold. constructor. 
-      - right; apply:CIH=>//=.
-        * inversion_clear Hdisj. apply:H0 (*ここだけ違う*).
-        * by pfold.
-        * by pfold.
-      - left; apply:IH=>//=.
-        * by pfold.
-        * by inversion_clear Hdisj.
-        * by pfold.
-    
-    - inversion_subst Hrule gop_step_rules_inv => _ Hrule' Hrule'';
-      move:Hrule'; unfold_upaco=>Hrule; inversion_subst Hrule g_step_gen_inv => _ Hrule' Hwit'.
-      move:Hrule'';unfold_upaco=>Hrule; inversion_subst Hrule g_step_gen_inv => _ Hrule'' Hwit'' _.
-      elim/gop_step_rules_inv: Hrule2  => _ => [>|>|>|>|>|>|AT0 GL0 GR0 ACT0 GL'0 GR'0 Hrule2' Hrule2'']//=; 
-      injection_subst => _.
-      pfold. constructor;
-      right; apply:CIH=>//=.
-        * by inversion_clear Hdisj; apply: H0.
-        * by pfold.
-        * move: Hrule2'; unfold_upaco=>Hrule2'. inversion_subst Hrule2' g_step_gen_inv=>_ Hrule2''' Hwit2'''.
-          pfold; by constructor.
-        * by inversion_clear Hdisj; apply: H1.
-        * move: Hrule2'; unfold_upaco=>Hrule2'. inversion_subst Hrule2' g_step_gen_inv=>_ Hrule2''' Hwit2'''.
-          pfold; by constructor.
-        * move: Hrule2''; unfold_upaco=>Hrule2''. inversion_subst Hrule2'' g_step_gen_inv=>_ Hrule2''' Hwit2'''.
-          pfold; by constructor.
-    
-    (*上と同じ*)
-    - inversion_subst Hrule gop_step_rules_inv => _ Hrule' Hrule'';
-      move:Hrule'; unfold_upaco=>Hrule; inversion_subst Hrule g_step_gen_inv => _ Hrule' Hwit'.
-      move:Hrule'';unfold_upaco=>Hrule; inversion_subst Hrule g_step_gen_inv => _ Hrule'' Hwit'' _.
-      elim/gop_step_rules_inv: Hrule2  => _ => [>|>|>|>|>|>|AT0 GL0 GR0 ACT0 GL'0 GR'0 Hrule2' Hrule2'']//=; 
-      injection_subst => _.
-      pfold. constructor;
-      right; apply:CIH=>//=.
-        * by inversion_clear Hdisj; apply: H0.
-        * by pfold.
-        * move: Hrule2'; unfold_upaco=>Hrule2'. inversion_subst Hrule2' g_step_gen_inv=>_ Hrule2''' Hwit2'''.
-          pfold; by constructor.
-        * by inversion_clear Hdisj; apply: H1.
-        * move: Hrule2'; unfold_upaco=>Hrule2'. inversion_subst Hrule2' g_step_gen_inv=>_ Hrule2''' Hwit2'''.
-          pfold; by constructor.
-        * move: Hrule2''; unfold_upaco=>Hrule2''. inversion_subst Hrule2'' g_step_gen_inv=>_ Hrule2''' Hwit2'''.
-          pfold; by constructor.
+    1,2,3,4,5,6:
+      (* contradiction *)
+      inversion_clear Hdisj;
+      (have: ACT<>ACT; last (by elim));
+      apply:H=>//;
+      by first [
+        by left; punfold Hstep1'; inversion Hstep1'; apply H |
+        by left; punfold Hstep2'; inversion Hstep2'; apply H |
+        by inversion Hwit1'; 
+        first [by left; apply H | by right; apply H]].
+
+    1,2,3:
+      (* asynchronous choice *)
+      pfold; constructor; right;
+      apply:CIH.
+      - all: 
+        try first[
+              by apply:Hstep1L
+            | by apply:Hstep1R
+            | by apply:Hstep2L
+            | by apply:Hstep2R
+        ].
+      - all:
+          by inversion_clear Hdisj as [ | | ? ? ? ? HdisjL HdisjR]; 
+             first [by apply:HdisjL|by apply:HdisjR].
 Qed.
